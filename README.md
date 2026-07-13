@@ -56,12 +56,12 @@ jobs:
 
     steps:
       - name: Checkout code
-      - uses: actions/checkout@v7
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.head_ref }}
 
       - name: Scan .tex file(s) and update ADS library
-      - uses: joriswitstok/ads-cite-sync@v0
+        uses: joriswitstok/ads-cite-sync@v0
         with:
           token: ${{ secrets.ADS_TOKEN }}
           library: "My ADS library"
