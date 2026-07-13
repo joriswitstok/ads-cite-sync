@@ -1,0 +1,100 @@
+name: "ADS citations sync"
+description: "Scan LaTeX file(s) for ADS bibcodes, add them to an ADS library, and export an up-to-date BibTeX .bib file."
+author: "Joris Witstok"
+
+branding:
+  icon: "book-open"
+  color: "blue"
+
+inputs:
+  token:
+    description: "ADS API token (store as a repository secret)"
+    required: true
+  tex_files:
+    description: >
+      Space-separated list of .tex files or glob patterns to scan.
+      Defaults to all *.tex files in the repository root.
+    required: false
+    default: "*.tex"
+  library:
+    description: "Name of the ADS library to add bibcodes to (created automatically if it does not exist)"
+    required: false
+    default: "Manuscript citations"
+  description:
+    description: "Description to use if the ADS library needs to be created"
+    required: false
+    default: "Bibcodes cited in a LaTeX manuscript"
+  public:
+    description: "Make a newly created library public (true/false)"
+    required: false
+    default: "false"
+  bib_file:
+    description: >
+      Path to write the exported BibTeX .bib file to.
+      Defaults to refs.bib in the directory of the first matched .tex file.
+    required: false
+    default: ""
+  no_bib:
+    description: "Skip BibTeX export entirely (true/false)"
+    required: false
+    default: "false"
+  commit_bib:
+    description: >
+      Commit and push the updated .bib file back to the repository (true/false).
+      Only has an effect when no_bib is false.
+    required: false
+    default: "true"
+  commit_message:
+    description: "Commit message to use when committing the updated .bib file"
+    required: false
+    default: "chore: update BibTeX references [skip ci]"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install dependencies
+      shell: bash
+      run: pip install requests
+
+    - name: Build argument list
+      id: build_args
+      shell: bash
+      run: |
+        ARGS="--token ${{ inputs.token }}"
+        ARGS="$ARGS --tex_files ${{ inputs.tex_files }}"
+        ARGS="$ARGS --library ${{ inputs.library }}"
+        ARGS="$ARGS --description ${{ inputs.description }}"
+        if [ "${{ inputs.public }}" = "true" ]; then
+          ARGS="$ARGS --public"
+        fi
+        if [ -n "${{ inputs.bib_file }}" ]; then
+          ARGS="$ARGS --bib_file ${{ inputs.bib_file }}"
+        fi
+        if [ "${{ inputs.no_bib }}" = "true" ]; then
+          ARGS="$ARGS --no_bib"
+        fi
+        echo "args=$ARGS" >> $GITHUB_OUTPUT
+
+    - name: Scan .tex file(s) and update ADS library
+      shell: bash
+      run: python "${{ github.action_path }}/ads_cite_sync.py" ${{ steps.build_args.outputs.args }}
+
+    - name: Commit updated .bib file
+      if: ${{ inputs.no_bib != 'true' && inputs.commit_bib == 'true' }}
+      shell: bash
+      run: |
+        git config user.name  "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        # Stage only .bib files; exit cleanly if nothing changed
+        git add "*.bib"
+        if git diff --cached --quiet; then
+          echo "No changes to .bib file(s), skipping commit."
+        else
+          git commit -m "${{ inputs.commit_message }}"
+          git push
+        fi
