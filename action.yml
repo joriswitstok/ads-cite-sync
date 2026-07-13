@@ -61,28 +61,18 @@ runs:
       shell: bash
       run: pip install requests
 
-    - name: Build argument list
-      id: build_args
-      shell: bash
-      run: |
-        ARGS="--token ${{ inputs.token }}"
-        ARGS="$ARGS --tex_files ${{ inputs.tex_files }}"
-        ARGS="$ARGS --library ${{ inputs.library }}"
-        ARGS="$ARGS --description ${{ inputs.description }}"
-        if [ "${{ inputs.public }}" = "true" ]; then
-          ARGS="$ARGS --public"
-        fi
-        if [ -n "${{ inputs.bib_file }}" ]; then
-          ARGS="$ARGS --bib_file ${{ inputs.bib_file }}"
-        fi
-        if [ "${{ inputs.no_bib }}" = "true" ]; then
-          ARGS="$ARGS --no_bib"
-        fi
-        echo "args=$ARGS" >> $GITHUB_OUTPUT
-
     - name: Scan .tex file(s) and update ADS library
       shell: bash
-      run: python "${{ github.action_path }}/ads_cite_sync.py" ${{ steps.build_args.outputs.args }}
+      run: |
+        ARGS=()
+        ARGS+=(--token "${{ inputs.token }}")
+        ARGS+=(--tex_files ${{ inputs.tex_files }})
+        ARGS+=(--library "${{ inputs.library }}")
+        ARGS+=(--description "${{ inputs.description }}")
+        [ "${{ inputs.public }}"  = "true" ] && ARGS+=(--public)
+        [ -n "${{ inputs.bib_file }}" ]      && ARGS+=(--bib_file "${{ inputs.bib_file }}")
+        [ "${{ inputs.no_bib }}"  = "true" ] && ARGS+=(--no_bib)
+        python "${{ github.action_path }}/ads_cite_sync.py" "${ARGS[@]}"
 
     - name: Commit updated .bib file
       if: ${{ inputs.no_bib != 'true' && inputs.commit_bib == 'true' }}
