@@ -35,26 +35,36 @@ In your GitHub repository: **Settings → Secrets and variables → Actions → 
 Create `.github/workflows/ads-cite-sync.yml` in your repository:
 
 ```yaml
-name: Sync citations to ADS library
+name: Sync references to ADS library
 
 on:
+  # Runs on pushes targeting the default branch
   push:
-    branches: [main]
+    branches: ["main"]
+
+  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch: {}
 
 jobs:
   update-ads-library:
+    name: Update ADS references
     runs-on: ubuntu-latest
+
     # Needed for the action to commit the updated .bib file back
     permissions:
       contents: write
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: joriswitstok/ads-cite-sync@v1
+    steps:
+      - name: Checkout code
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Scan .tex file(s) and update ADS library
+      - uses: joriswitstok/ads-cite-sync@v0
         with:
           token: ${{ secrets.ADS_TOKEN }}
-          library: "Manuscript citations"
+          library: "My ADS library"
 ```
 
 ## Inputs
