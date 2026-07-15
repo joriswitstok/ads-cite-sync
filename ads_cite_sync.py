@@ -108,8 +108,19 @@ if not args.no_bib:
     bibtex = export_response.json()["export"]
 
     if args.add_macros:
-        # Replace occurrences 
-        bibtex = bibtex.replace("journal = {The Open Journal of Astrophysics}", r"\ojap").replace("journal = {Nature Astronomy}", r"\nat").replace("journal = {Reviews of Modern Physics}", r"\revmodphys")
+        journal_replacements = {
+            r"The Open Journal of Astrophysics": r"\ojap",
+            r"Nature Astronomy": r"\natas",
+            r"Reviews of Modern Physics": r"\revmodphys",
+        }
+
+        # Replace occurrences with regex
+        for pattern, replacement in journal_replacements.items():
+            bibtex = re.sub(
+                r"(journal\s*=\s*\{)" + pattern + r"(\})",
+                lambda m, r=replacement: m.group(1) + r + m.group(2),
+                bibtex
+            )
  
     # Determine output path: default to same directory and stem as the (first matching) .tex file
     if args.bib_file:
