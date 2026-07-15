@@ -38,6 +38,10 @@ inputs:
     description: "Skip BibTeX export entirely (true/false)"
     required: false
     default: "false"
+  add_macros:
+    description: "Expand on AASTeX macros for journal abbreviations, e.g. OJAp (true/false)"
+    required: false
+    default: "false"
   commit_bib:
     description: >
       Commit and push the updated .bib file back to the repository (true/false).
@@ -71,7 +75,8 @@ runs:
         ARGS+=(--description "${{ inputs.description }}")
         [ "${{ inputs.public }}"  = "true" ] && ARGS+=(--public)
         [ -n "${{ inputs.bib_file }}" ]      && ARGS+=(--bib_file "${{ inputs.bib_file }}")
-        [ "${{ inputs.no_bib }}"  = "true" ] && ARGS+=(--no_bib)
+        [ "${{ inputs.no_bib }}"  = "true" ] && ARGS+=(--no-bib)
+        [ "${{ inputs.add_macros }}"  = "true" ] && ARGS+=(--add-macros)
         python "${{ github.action_path }}/ads_cite_sync.py" "${ARGS[@]}"
 
     - name: Commit updated .bib file

@@ -30,7 +30,8 @@ parser.add_argument("-l", "--library", default="Manuscript citations", help="Nam
 parser.add_argument("-d", "--description", default="Bibcodes cited in a LaTeX manuscript", help="Description to use if the library needs to be created")
 parser.add_argument("-p", "--public", action="store_true", help="Make a newly created library public (default: private)")
 parser.add_argument("-b", "--bib_file", default=None, help="Path to write the exported BibTeX .bib file to (default: refs.bib in the directory of the first matched .tex file)")
-parser.add_argument("--no_bib", action="store_true", help="Skip BibTeX export entirely")
+parser.add_argument("--no-bib", action="store_true", help="Skip BibTeX export entirely")
+parser.add_argument("-m", "--add-macros", action="store_true", help="Expand on AASTeX macros for journal abbreviations")
 args = parser.parse_args()
 headers = {"Authorization": "Bearer " + args.token}
 
@@ -105,6 +106,10 @@ if not args.no_bib:
                                     data=json.dumps({"bibcode": valid_bibcodes}))
     export_response.raise_for_status()
     bibtex = export_response.json()["export"]
+
+    if args.add_macros:
+        # Replace occurrences 
+        bibtex = bibtex.replace("journal = {The Open Journal of Astrophysics}", r"\ojap").replace("journal = {Nature Astronomy}", r"\nat").replace("journal = {Reviews of Modern Physics}", r"\revmodphys")
  
     # Determine output path: default to same directory and stem as the (first matching) .tex file
     if args.bib_file:
