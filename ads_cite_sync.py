@@ -84,11 +84,21 @@ else:
 
 # Add the bibcodes found in the LaTeX file to the library
 headers["Content-type"] = "application/json"
-payload = {"bibcode": bibcodes, "action": "add"}
-results = requests.post(get_biblib_url("documents/" + library_id), headers=headers, data=json.dumps(payload)).json()
 
-n_added = results.get("number_added", 0)
-invalid_bibcodes = results.get("invalid_bibcodes", [])
+# Add bibcodes to the library in chunks of 100
+chunk_size = 100  # maximum allowed per request
+n_added = 0
+invalid_bibcodes = []
+for i in range(0, len(bibcodes), chunk_size):
+    chunk = bibcodes[i:i + chunk_size]
+    result = requests.post(
+        get_biblib_url("documents/" + library_id),
+        headers=headers,
+        data=json.dumps({"bibcode": chunk, "action": "add"})
+    ).json()
+    n_added += result.get("number_added", 0)
+    invalid_bibcodes.extend(result.get("invalid_bibcodes", []))
+
 print("Added {:d} bibcodes to library '{}'".format(n_added, args.library))
 if invalid_bibcodes:
     print("The following {:d} bibcodes were not recognised by ADS and were not added:".format(len(invalid_bibcodes)))
@@ -97,15 +107,34 @@ if invalid_bibcodes:
 
 # Export a BibTeX .bib file for all valid bibcodes unless explicitly skipped
 if not args.no_bib:
-    valid_bibcodes = [b for b in bibcodes if b not in invalid_bibcodes]
-    print("Fetching BibTeX entries for {:d} bibcodes...".format(len(valid_bibcodes)))
- 
-    headers["Content-type"] = "application/json"
-    export_response = requests.post(get_export_url("bibtex"),
-                                    headers=headers,
-                                    data=json.dumps({"bibcode": valid_bibcodes}))
-    export_response.raise_for_status()
-    bibtex = export_response.json()["export"]
+    # Fetch all bibcodes currently in the library (paginated)
+    library_bibcodes = []
+    start = 0
+    while True:
+        response = requests.get(
+            get_biblib_url("libraries/{}".format(library_id)),
+            headers=headers,
+            params={"start": start, "rows": chunk_size}
+        ).json()
+        library_bibcodes.extend(response["documents"])
+        start += chunk_size
+        if start >= response["metadata"]["num_documents"]:
+            break
+    print("Fetching BibTeX entries for {:d} bibcodes in library '{}'...".format(
+            len(library_bibcodes), args.library))
+
+    # Export bibcodes into bibtex file
+    bibtex_chunks = []
+    for i in range(0, len(library_bibcodes), chunk_size):
+        chunk = library_bibcodes[i:i + chunk_size]
+        export_response = requests.post(
+            get_export_url("bibtex"),
+            headers=headers,
+            data=json.dumps({"bibcode": chunk})
+        )
+        export_response.raise_for_status()
+        bibtex_chunks.append(export_response.json()["export"])
+    bibtex = "\n".join(bibtex_chunks)
 
     if args.add_macros:
         journal_replacements = {
