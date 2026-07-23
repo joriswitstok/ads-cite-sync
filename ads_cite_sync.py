@@ -165,4 +165,4 @@ if not args.no_bib:
  
     with open(bib_path, 'w', encoding="utf-8") as f:
         f.write(bibtex)
-    print("Wrote BibTeX for {:d} entries to {}".format(len(valid_bibcodes), bib_path))
+    print("Wrote BibTeX for {:d} entries to {}".format(len(library_bibcodes), bib_path))
