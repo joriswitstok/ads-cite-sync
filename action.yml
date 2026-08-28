@@ -1,5 +1,5 @@
 name: "ADS citations sync"
-description: "Scan LaTeX file(s) for ADS bibcodes, add them to an ADS library, and export an up-to-date BibTeX .bib file."
+description: "Scan LaTeX file(s) for ADS bibcodes, add them to an ADS library, update superseded bibcodes, and export an up-to-date BibTeX .bib file."
 author: "Joris Witstok"
 
 branding:
@@ -42,14 +42,27 @@ inputs:
     description: "Expand on AASTeX macros for journal abbreviations, e.g. OJAp (true/false)"
     required: false
     default: "false"
+  update_tex:
+    description: >
+      Replace superseded bibcodes in the scanned .tex file(s) by their canonical counterparts
+      (true/false), e.g. an arXiv preprint bibcode that has since been merged into the bibcode
+      of the published record.
+    required: false
+    default: "true"
   commit_bib:
     description: >
       Commit and push the updated .bib file back to the repository (true/false).
       Only has an effect when no_bib is false.
     required: false
     default: "true"
+  commit_tex:
+    description: >
+      Commit and push the updated .tex file(s) back to the repository (true/false).
+      Only has an effect when update_tex is true.
+    required: false
+    default: "true"
   commit_message:
-    description: "Commit message to use when committing the updated .bib file"
+    description: "Commit message to use when committing the updated .bib and .tex file(s)"
     required: false
     default: "chore: update BibTeX references [skip ci]"
 
@@ -77,18 +90,24 @@ runs:
         [ -n "${{ inputs.bib_file }}" ]      && ARGS+=(--bib_file "${{ inputs.bib_file }}")
         [ "${{ inputs.no_bib }}"  = "true" ] && ARGS+=(--no-bib)
         [ "${{ inputs.add_macros }}"  = "true" ] && ARGS+=(--add-macros)
+        [ "${{ inputs.update_tex }}" = "false" ] && ARGS+=(--no-update-tex)
         python "${{ github.action_path }}/ads_cite_sync.py" "${ARGS[@]}"
 
-    - name: Commit updated .bib file
-      if: ${{ inputs.no_bib != 'true' && inputs.commit_bib == 'true' }}
+    - name: Commit updated .bib and .tex file(s)
+      if: ${{ (inputs.no_bib != 'true' && inputs.commit_bib == 'true') || (inputs.update_tex != 'false' && inputs.commit_tex == 'true') }}
       shell: bash
       run: |
         git config user.name  "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        # Stage only .bib files; exit cleanly if nothing changed
-        git add "*.bib"
+        # Stage only the file types the action may have rewritten; exit cleanly if nothing changed
+        if [ "${{ inputs.no_bib }}" != "true" ] && [ "${{ inputs.commit_bib }}" = "true" ]; then
+          git add "*.bib" || echo "No .bib file(s) to stage."
+        fi
+        if [ "${{ inputs.update_tex }}" != "false" ] && [ "${{ inputs.commit_tex }}" = "true" ]; then
+          git add "*.tex" || echo "No .tex file(s) to stage."
+        fi
         if git diff --cached --quiet; then
-          echo "No changes to .bib file(s), skipping commit."
+          echo "No changes to .bib or .tex file(s), skipping commit."
         else
           git commit -m "${{ inputs.commit_message }}"
           git push

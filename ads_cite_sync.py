@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 Script for scanning a LaTeX file for ADS bibcodes, adding them to an ADS library,
-and optionally exporting an up-to-date BibTeX .bib file.
+optionally replacing superseded (e.g. arXiv preprint) bibcodes by their published
+counterparts in the .tex file(s), and optionally exporting an up-to-date BibTeX .bib file.
 
 Joris Witstok, 19 June 2026
 """
@@ -32,6 +33,8 @@ parser.add_argument("-p", "--public", action="store_true", help="Make a newly cr
 parser.add_argument("-b", "--bib_file", default=None, help="Path to write the exported BibTeX .bib file to (default: refs.bib in the directory of the first matched .tex file)")
 parser.add_argument("--no-bib", action="store_true", help="Skip BibTeX export entirely")
 parser.add_argument("-m", "--add-macros", action="store_true", help="Expand on AASTeX macros for journal abbreviations")
+parser.add_argument("--no-update-tex", action="store_true",
+                    help="Skip replacing superseded bibcodes (e.g. arXiv preprints that have since been published) in the scanned .tex file(s)")
 args = parser.parse_args()
 headers = {"Authorization": "Bearer " + args.token}
 
@@ -40,6 +43,9 @@ def get_biblib_url(endpoint):
  
 def get_export_url(endpoint):
     return "https://api.adsabs.harvard.edu/v1/export/{}".format(endpoint)
+
+def get_search_url(endpoint):
+    return "https://api.adsabs.harvard.edu/v1/search/{}".format(endpoint)
 
 # Regular expression matching the canonical 19-character ADS bibcode format, e.g.
 # "2026OJAp....955261W": 4-digit year + 5-character (dot-padded) bibstem
@@ -105,10 +111,10 @@ if invalid_bibcodes:
     for bibcode in invalid_bibcodes:
         print("  {}".format(bibcode))
 
-# Export a BibTeX .bib file for all valid bibcodes unless explicitly skipped
-if not args.no_bib:
-    # Fetch all bibcodes currently in the library (paginated)
-    library_bibcodes = []
+# Fetch all bibcodes currently in the library (paginated); needed both to detect superseded
+# bibcodes in the .tex file(s) and to export the BibTeX entries
+library_bibcodes = []
+if not (args.no_bib and args.no_update_tex):
     start = 0
     while True:
         response = requests.get(
@@ -120,6 +126,65 @@ if not args.no_bib:
         start += chunk_size
         if start >= response["metadata"]["num_documents"]:
             break
+
+# Replace superseded bibcodes in the .tex file(s) unless explicitly skipped: ADS merges an
+# arXiv preprint record (e.g. 2025arXiv250918302P) into the published record (2026A&A...712A.113P)
+# once it appears, keeping the preprint bibcode only as an alternate. The library therefore holds
+# the canonical, published bibcode, while the .tex file(s) may still cite the superseded one
+if not args.no_update_tex:
+    library_bibcode_set = set(library_bibcodes)
+
+    # Any cited bibcode absent from the library was either not recognised by ADS
+    # or has been superseded by (merged into) another, canonical bibcode
+    candidates = [b for b in bibcodes if b not in library_bibcode_set]
+    replacements = {}
+
+    if candidates:
+        print("Checking {:d} cited bibcode(s) absent from library '{}' for superseded records...".format(
+                len(candidates), args.library))
+        candidate_set = set(candidates)
+
+        # Resolve the canonical bibcode of each candidate: searching on "identifier" also
+        # matches alternate (superseded) bibcodes, while "bibcode" in the response is canonical
+        search_chunk_size = 50
+        for i in range(0, len(candidates), search_chunk_size):
+            chunk = candidates[i:i + search_chunk_size]
+            search_response = requests.get(
+                get_search_url("query"),
+                headers=headers,
+                params={"q": "identifier:({})".format(' OR '.join('"{}"'.format(b) for b in chunk)),
+                        "fl": "bibcode,alternate_bibcode", "rows": len(chunk)}
+            )
+            search_response.raise_for_status()
+            for doc in search_response.json()["response"]["docs"]:
+                canonical = doc["bibcode"]
+                for alternate in doc.get("alternate_bibcode", []):
+                    if alternate in candidate_set and alternate != canonical:
+                        replacements[alternate] = canonical
+
+    if replacements:
+        print("Found {:d} superseded bibcode(s):".format(len(replacements)))
+        for old_bibcode, new_bibcode in replacements.items():
+            print("  {} -> {}".format(old_bibcode, new_bibcode))
+
+        # Replace all whole-word occurrences in each .tex file containing them
+        superseded_regex = re.compile(r"\b(?:{})\b".format('|'.join(re.escape(b) for b in replacements)))
+        for tex_file in tex_files:
+            with open(tex_file, 'r', encoding="utf-8") as f:
+                text = f.read()
+            text, n_replaced = superseded_regex.subn(lambda m: replacements[m.group(0)], text)
+            if n_replaced:
+                with open(tex_file, 'w', encoding="utf-8") as f:
+                    f.write(text)
+                print("  Updated {:d} bibcode instance(s) in {}".format(n_replaced, tex_file))
+
+        # Keep the in-memory list consistent with the updated .tex file(s)
+        bibcodes = list(dict.fromkeys(replacements.get(b, b) for b in bibcodes))
+    else:
+        print("No superseded bibcodes found in the scanned .tex file(s)")
+
+# Export a BibTeX .bib file for all valid bibcodes unless explicitly skipped
+if not args.no_bib:
     print("Fetching BibTeX entries for {:d} bibcodes in library '{}'...".format(
             len(library_bibcodes), args.library))
 
