@@ -31,11 +31,18 @@ inputs:
   bib_file:
     description: >
       Path to write the exported BibTeX .bib file to.
-      Defaults to refs.bib in the directory of the first matched .tex file.
+      Defaults to the .bib file sharing its stem with one of the scanned .tex files, or
+      otherwise to the single .bib file in the directory of the first matched .tex file.
     required: false
     default: ""
   no_bib:
     description: "Skip BibTeX export entirely (true/false)"
+    required: false
+    default: "false"
+  keep_unicode:
+    description: |
+      Leave non-ASCII characters in the exported .bib file as-is instead of converting them to
+      LaTeX macros (true/false). Only set this when compiling with LuaLaTeX or XeLaTeX.
     required: false
     default: "false"
   add_macros:
@@ -89,6 +96,7 @@ runs:
         [ "${{ inputs.public }}"  = "true" ] && ARGS+=(--public)
         [ -n "${{ inputs.bib_file }}" ]      && ARGS+=(--bib_file "${{ inputs.bib_file }}")
         [ "${{ inputs.no_bib }}"  = "true" ] && ARGS+=(--no-bib)
+        [ "${{ inputs.keep_unicode }}" = "true" ] && ARGS+=(--keep-unicode)
         [ "${{ inputs.add_macros }}"  = "true" ] && ARGS+=(--add-macros)
         [ "${{ inputs.update_tex }}" = "false" ] && ARGS+=(--no-update-tex)
         python "${{ github.action_path }}/ads_cite_sync.py" "${ARGS[@]}"

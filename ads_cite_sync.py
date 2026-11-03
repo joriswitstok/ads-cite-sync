@@ -21,6 +21,7 @@ import glob
 import requests
 import re
 import json
+import unicodedata
 
 # Retrieve API token, LaTeX file(s), library settings, and BibTeX export options as arguments
 parser = argparse.ArgumentParser()
@@ -30,8 +31,10 @@ parser.add_argument("-f", "--tex_files", nargs="+", default=["*.tex"],
 parser.add_argument("-l", "--library", default="Manuscript citations", help="Name of the ADS library to add bibcodes to (created automatically if it does not exist)")
 parser.add_argument("-d", "--description", default="Bibcodes cited in a LaTeX manuscript", help="Description to use if the library needs to be created")
 parser.add_argument("-p", "--public", action="store_true", help="Make a newly created library public (default: private)")
-parser.add_argument("-b", "--bib_file", default=None, help="Path to write the exported BibTeX .bib file to (default: refs.bib in the directory of the first matched .tex file)")
+parser.add_argument("-b", "--bib_file", default=None, help="Path to write the exported BibTeX .bib file to (default: the .bib file sharing its stem with a scanned .tex file, or the single .bib file in the directory of the first .tex file)")
 parser.add_argument("--no-bib", action="store_true", help="Skip BibTeX export entirely")
+parser.add_argument("--keep-unicode", action="store_true",
+                    help="Do not convert non-ASCII characters in the exported BibTeX to LaTeX macros (e.g. when compiling with LuaLaTeX/XeLaTeX)")
 parser.add_argument("-m", "--add-macros", action="store_true", help="Expand on AASTeX macros for journal abbreviations")
 parser.add_argument("--no-update-tex", action="store_true",
                     help="Skip replacing superseded bibcodes (e.g. arXiv preprints that have since been published) in the scanned .tex file(s)")
@@ -52,6 +55,85 @@ def get_search_url(endpoint):
 # + 4-character (dot-padded) volume + 1-character qualifier + 4-character
 # (dot-padded) page + 1-character first-author initial
 bibcode_regex = re.compile(r"\b\d{4}[A-Za-z0-9.&]{14}[A-Za-z]\b")
+
+# ADS BibTeX exports occasionally contain raw Unicode characters (Greek letters, math symbols,
+# dashes, accented letters) which make pdfLaTeX's inputenc fail. Map the known ones to LaTeX
+# macros; math symbols are wrapped in \ensuremath so they work both inside and outside math mode.
+unicode_latex_map = {
+    # Greek letters (lower and upper case)
+    "α": r"{\ensuremath{\alpha}}", "β": r"{\ensuremath{\beta}}", "γ": r"{\ensuremath{\gamma}}",
+    "δ": r"{\ensuremath{\delta}}", "ε": r"{\ensuremath{\epsilon}}", "ϵ": r"{\ensuremath{\epsilon}}",
+    "ζ": r"{\ensuremath{\zeta}}", "η": r"{\ensuremath{\eta}}", "θ": r"{\ensuremath{\theta}}",
+    "ι": r"{\ensuremath{\iota}}", "κ": r"{\ensuremath{\kappa}}", "λ": r"{\ensuremath{\lambda}}",
+    "μ": r"{\ensuremath{\mu}}", "µ": r"{\ensuremath{\mu}}", "ν": r"{\ensuremath{\nu}}",
+    "ξ": r"{\ensuremath{\xi}}", "π": r"{\ensuremath{\pi}}", "ρ": r"{\ensuremath{\rho}}",
+    "σ": r"{\ensuremath{\sigma}}", "τ": r"{\ensuremath{\tau}}", "υ": r"{\ensuremath{\upsilon}}",
+    "φ": r"{\ensuremath{\phi}}", "ϕ": r"{\ensuremath{\phi}}", "χ": r"{\ensuremath{\chi}}",
+    "ψ": r"{\ensuremath{\psi}}", "ω": r"{\ensuremath{\omega}}",
+    "Γ": r"{\ensuremath{\Gamma}}", "Δ": r"{\ensuremath{\Delta}}", "Θ": r"{\ensuremath{\Theta}}",
+    "Λ": r"{\ensuremath{\Lambda}}", "Ξ": r"{\ensuremath{\Xi}}", "Π": r"{\ensuremath{\Pi}}",
+    "Σ": r"{\ensuremath{\Sigma}}", "Φ": r"{\ensuremath{\Phi}}", "Ψ": r"{\ensuremath{\Psi}}",
+    "Ω": r"{\ensuremath{\Omega}}",
+    # Math and comparison symbols
+    "≃": r"{\ensuremath{\simeq}}", "≈": r"{\ensuremath{\approx}}", "∼": r"{\ensuremath{\sim}}",
+    "≤": r"{\ensuremath{\leq}}", "≥": r"{\ensuremath{\geq}}", "≲": r"{\ensuremath{\lesssim}}",
+    "≳": r"{\ensuremath{\gtrsim}}", "≠": r"{\ensuremath{\neq}}", "≡": r"{\ensuremath{\equiv}}",
+    "∝": r"{\ensuremath{\propto}}", "∞": r"{\ensuremath{\infty}}", "×": r"{\ensuremath{\times}}",
+    "±": r"{\ensuremath{\pm}}", "∓": r"{\ensuremath{\mp}}", "−": r"{\ensuremath{-}}",
+    "→": r"{\ensuremath{\rightarrow}}", "←": r"{\ensuremath{\leftarrow}}", "√": r"{\ensuremath{\surd}}",
+    "∑": r"{\ensuremath{\sum}}", "∫": r"{\ensuremath{\int}}", "∂": r"{\ensuremath{\partial}}",
+    "∇": r"{\ensuremath{\nabla}}", "⊙": r"{\ensuremath{\odot}}", "☉": r"{\ensuremath{\odot}}",
+    "°": r"{\ensuremath{^\circ}}", "′": r"{\ensuremath{^\prime}}", "″": r"{\ensuremath{^{\prime\prime}}}",
+    "¹": r"{\ensuremath{^1}}", "²": r"{\ensuremath{^2}}", "³": r"{\ensuremath{^3}}",
+    "⁻": r"{\ensuremath{^-}}", "⁺": r"{\ensuremath{^+}}",
+    "Å": r"{\AA}", "å": r"{\aa}",
+    # Dashes, spaces, quotes and other punctuation
+    "–": "--", "—": "---", "―": "---", "─": "--", "‐": "-", "‑": "-", "‒": "--",
+    " ": "~", " ": r"\,", " ": r"\,", " ": r"\ ", " ": r"\ ",
+    "‘": "`", "’": "'", "‚": ",", "“": "``", "”": "''", "„": ",,",
+    "…": r"\dots", "•": r"\textbullet", "·": r"{\ensuremath{\cdot}}", "†": r"\dag", "‡": r"\ddag",
+    "§": r"\S", "¶": r"\P", "©": r"\copyright", "®": r"\textregistered", "™": r"\texttrademark",
+    "€": r"\euro", "£": r"\pounds", "‰": r"\textperthousand", "¿": r"?`", "¡": r"!`",
+    # Letters without a combining-accent decomposition
+    "ß": r"{\ss}", "æ": r"{\ae}", "Æ": r"{\AE}", "œ": r"{\oe}", "Œ": r"{\OE}",
+    "ø": r"{\o}", "Ø": r"{\O}", "ł": r"{\l}", "Ł": r"{\L}", "đ": r"{\dj}", "Đ": r"{\DJ}",
+    "ð": r"{\dh}", "Ð": r"{\DH}", "þ": r"{\th}", "Þ": r"{\TH}", "ı": r"{\i}", "ȷ": r"{\j}",
+}
+
+# Combining diacritical marks (from NFD decomposition) mapped to LaTeX accent commands
+combining_accent_map = {
+    "̀": "`", "́": "'", "̂": "^", "̃": "~", "̈": '"', "̄": "=",
+    "̆": "u", "̇": ".", "̊": "r", "̋": "H", "̌": "v", "̧": "c",
+    "̨": "k", "̣": "d", "̱": "b",
+}
+
+def unicode_to_latex(text):
+    """Replace non-ASCII characters in a string by equivalent LaTeX macros where possible.
+    Returns the converted text and a sorted list of characters that could not be converted."""
+    out = []
+    unconverted = set()
+    for char in text:
+        if ord(char) < 128:
+            out.append(char)
+        elif char in unicode_latex_map:
+            out.append(unicode_latex_map[char])
+        else:
+            # Try decomposing accented letters into base letter + combining accent(s)
+            decomposed = unicodedata.normalize("NFD", char)
+            base, accents = decomposed[0], decomposed[1:]
+            if ord(base) < 128 and accents and all(a in combining_accent_map for a in accents):
+                latex = base
+                # Dotless i/j are needed for accents placed above the letter
+                for a in accents:
+                    cmd = combining_accent_map[a]
+                    if latex in ("i", "j") and cmd not in ("c", "k", "d", "b"):
+                        latex = "\\" + latex
+                    latex = "{\\" + cmd + "{" + latex + "}}"
+                out.append(latex)
+            else:
+                out.append(char)
+                unconverted.add(char)
+    return "".join(out), sorted(unconverted)
 
 # Resolve all glob patterns and collect matched .tex files, preserving order and deduplicating
 tex_files = list(dict.fromkeys(f for pattern in args.tex_files for f in sorted(glob.glob(pattern))))
@@ -215,19 +297,43 @@ if not args.no_bib:
                 lambda m, r=replacement: m.group(1) + r + m.group(2),
                 bibtex
             )
- 
-    # Determine output path: default to same directory and stem as the (first matching) .tex file
+
+    if not args.keep_unicode:
+        # Convert raw Unicode characters in the export to LaTeX macros so that pdfLaTeX can
+        # compile the .bib file (ADS exports e.g. "Lyα" or "z ≃ 9" verbatim)
+        n_nonascii = sum(1 for c in bibtex if ord(c) >= 128)
+        bibtex, unconverted = unicode_to_latex(bibtex)
+        if n_nonascii:
+            print("Converted {:d} non-ASCII character(s) in the BibTeX export to LaTeX macros".format(
+                    n_nonascii - sum(bibtex.count(c) for c in unconverted)))
+        if unconverted:
+            print("Warning: no LaTeX equivalent known for the following character(s), left as-is: {}".format(
+                    ", ".join("'{}' (U+{:04X})".format(c, ord(c)) for c in unconverted)))
+
+    # Determine output path: default to the .bib file sharing its directory and stem with one
+    # of the scanned .tex files; failing that, fall back to a single existing .bib file in the
+    # directory of the first .tex file
     if args.bib_file:
         bib_path = args.bib_file
     else:
-        for ti, tex_file in enumerate(tex_files):
-            tex_stem = os.path.splitext(tex_file)[0]
-            bib_path = tex_stem + ".bib"
-            if os.path.isfile(bib_path):
+        bib_path = None
+        for tex_file in tex_files:
+            candidate = os.path.splitext(tex_file)[0] + ".bib"
+            if os.path.isfile(candidate):
+                bib_path = candidate
                 break
-            elif ti == len(tex_files) - 1:
-                raise ValueError("no matching .bib file found")
- 
+        if bib_path is None:
+            tex_dir = os.path.dirname(tex_files[0]) or "."
+            bib_candidates = sorted(glob.glob(os.path.join(tex_dir, "*.bib")))
+            if len(bib_candidates) == 1:
+                bib_path = bib_candidates[0]
+                print("No .bib file matching a scanned .tex file found, falling back to {}".format(bib_path))
+            elif len(bib_candidates) == 0:
+                sys.exit("No .bib file found in {}; specify the output path with --bib_file".format(tex_dir))
+            else:
+                sys.exit("No .bib file matching a scanned .tex file found and multiple candidates exist in {} ({}); "
+                         "specify the output path with --bib_file".format(tex_dir, ", ".join(bib_candidates)))
+
     with open(bib_path, 'w', encoding="utf-8") as f:
         f.write(bibtex)
     print("Wrote BibTeX for {:d} entries to {}".format(len(library_bibcodes), bib_path))

@@ -92,8 +92,9 @@ jobs:
 | `library` | Name of the ADS library to add bibcodes to | `Manuscript citations` |
 | `description` | Description used if the library is newly created | `Bibcodes cited in a LaTeX manuscript` |
 | `public` | Make a newly created library public | `false` |
-| `bib_file` | Path for the exported `.bib` file | `refs.bib` next to first `.tex` file |
+| `bib_file` | Path for the exported `.bib` file | `.bib` matching a scanned `.tex` file, else the single `.bib` next to it |
 | `no_bib` | Skip BibTeX export entirely | `false` |
+| `keep_unicode` | Leave non-ASCII characters in the `.bib` file as-is (for LuaLaTeX/XeLaTeX) | `false` |
 | `add_macros` | Expand on AASTeX macros for journal abbreviations, e.g. `\ojap` | `false` |
 | `update_tex` | Replace superseded bibcodes in the scanned `.tex` file(s) | `true` |
 | `commit_bib` | Commit and push the updated `.bib` file back to the repository | `true` |
@@ -115,6 +116,15 @@ jobs:
   LaTeX source in place. When syncing with Overleaf, pull the resulting commit into the Overleaf
   project so the two do not diverge; set `update_tex: false` (or `commit_tex: false`) to leave the
   `.tex` file(s) untouched.
+- **Output `.bib` file**: unless `bib_file` is given, the export is written to the `.bib` file
+  sharing its directory and stem with one of the scanned `.tex` files (e.g. `main.bib` for
+  `main.tex`). If no such file exists but the directory of the first `.tex` file contains exactly
+  one `.bib` file, that file is used instead; otherwise the action fails and asks for `bib_file`.
+- **Unicode characters**: ADS occasionally exports raw Unicode in titles (e.g. `Lyα`, `z ≃ 9`,
+  `7─14`), which makes pdfLaTeX fail with an "inputenc" error. By default these are converted to
+  LaTeX macros (`{\ensuremath{\alpha}}`, `{\ensuremath{\simeq}}`, `--`, accented letters as
+  `{\"{u}}`, etc.); any character without a known equivalent is left as-is with a warning in the
+  log. Set `keep_unicode: true` to disable the conversion when compiling with LuaLaTeX/XeLaTeX.
 - **Running the script locally**: you can also run `ads_cite_sync.py` directly:
 
   ```bash
