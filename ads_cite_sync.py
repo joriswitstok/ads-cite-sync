@@ -23,6 +23,10 @@ import re
 import json
 import unicodedata
 
+# Helpers for preserving manually added (non-ADS) .bib entries, shipped next to this script
+sys.path.insert(0, currentdir)
+import bib_merge
+
 # Retrieve API token, LaTeX file(s), library settings, and BibTeX export options as arguments
 parser = argparse.ArgumentParser()
 parser.add_argument("-t", "--token", help="API token for ADS")
@@ -38,6 +42,8 @@ parser.add_argument("--keep-unicode", action="store_true",
 parser.add_argument("-m", "--add-macros", action="store_true", help="Expand on AASTeX macros for journal abbreviations")
 parser.add_argument("--no-update-tex", action="store_true",
                     help="Skip replacing superseded bibcodes (e.g. arXiv preprints that have since been published) in the scanned .tex file(s)")
+parser.add_argument("--no-keep-manual", action="store_true",
+                    help="Overwrite the .bib file with the ADS export only, discarding manually added entries that are not (yet) on ADS")
 args = parser.parse_args()
 headers = {"Authorization": "Bearer " + args.token}
 
@@ -141,6 +147,44 @@ if not tex_files:
     sys.exit("No .tex files matched the pattern(s): {}".format(', '.join(args.tex_files)))
 print("Scanning {:d} .tex file(s): {}".format(len(tex_files), ', '.join(tex_files)))
 
+# Determine the output .bib path up front, since its current contents (manually added entries)
+# are needed before the .tex file(s) are updated: default to the .bib file sharing its directory
+# and stem with one of the scanned .tex files; failing that, fall back to a single existing .bib
+# file in the directory of the first .tex file
+bib_path = None
+existing_bib = ""
+if not args.no_bib:
+    if args.bib_file:
+        bib_path = args.bib_file
+    else:
+        for tex_file in tex_files:
+            candidate = os.path.splitext(tex_file)[0] + ".bib"
+            if os.path.isfile(candidate):
+                bib_path = candidate
+                break
+        if bib_path is None:
+            tex_dir = os.path.dirname(tex_files[0]) or "."
+            bib_candidates = sorted(glob.glob(os.path.join(tex_dir, "*.bib")))
+            if len(bib_candidates) == 1:
+                bib_path = bib_candidates[0]
+                print("No .bib file matching a scanned .tex file found, falling back to {}".format(bib_path))
+            elif len(bib_candidates) == 0:
+                sys.exit("No .bib file found in {}; specify the output path with --bib_file".format(tex_dir))
+            else:
+                sys.exit("No .bib file matching a scanned .tex file found and multiple candidates exist in {} ({}); "
+                         "specify the output path with --bib_file".format(tex_dir, ", ".join(bib_candidates)))
+    if not args.no_keep_manual and os.path.isfile(bib_path):
+        with open(bib_path, 'r', encoding="utf-8") as f:
+            existing_bib = f.read()
+
+def read_tex():
+    """Return the concatenated contents of all scanned .tex files."""
+    texts = []
+    for tex_file in tex_files:
+        with open(tex_file, 'r', encoding="utf-8") as f:
+            texts.append(f.read())
+    return "\n".join(texts)
+
 # Read and concatenate all matched .tex files, then scan the combined text for bibcodes
 bibcodes_per_file = {}
 for tex_file in tex_files:
@@ -175,17 +219,23 @@ headers["Content-type"] = "application/json"
 
 # Add bibcodes to the library in chunks of 100
 chunk_size = 100  # maximum allowed per request
-n_added = 0
-invalid_bibcodes = []
-for i in range(0, len(bibcodes), chunk_size):
-    chunk = bibcodes[i:i + chunk_size]
-    result = requests.post(
-        get_biblib_url("documents/" + library_id),
-        headers=headers,
-        data=json.dumps({"bibcode": chunk, "action": "add"})
-    ).json()
-    n_added += result.get("number_added", 0)
-    invalid_bibcodes.extend(result.get("invalid_bibcodes", []))
+
+def add_to_library(bibcodes_to_add):
+    """Add bibcodes to the library; returns the number added and the list of invalid bibcodes."""
+    n_added = 0
+    invalid = []
+    for i in range(0, len(bibcodes_to_add), chunk_size):
+        chunk = bibcodes_to_add[i:i + chunk_size]
+        result = requests.post(
+            get_biblib_url("documents/" + library_id),
+            headers=headers,
+            data=json.dumps({"bibcode": chunk, "action": "add"})
+        ).json()
+        n_added += result.get("number_added", 0)
+        invalid.extend(result.get("invalid_bibcodes", []))
+    return n_added, invalid
+
+n_added, invalid_bibcodes = add_to_library(bibcodes)
 
 print("Added {:d} bibcodes to library '{}'".format(n_added, args.library))
 if invalid_bibcodes:
@@ -244,13 +294,61 @@ if not args.no_update_tex:
                     if alternate in candidate_set and alternate != canonical:
                         replacements[alternate] = canonical
 
+    # Manually added .bib entries (e.g. a preprint that was not yet on ADS when it was cited)
+    # may since have received an ADS record, possibly under a different bibcode than their key:
+    # look up each cited manual entry with an arXiv identifier and, if found, cite the ADS record
+    if existing_bib:
+        tex_text = read_tex()
+        manual_eprints = {}
+        for block in bib_merge.parse_bib(existing_bib):
+            key = block["key"]
+            if key is None or key in library_bibcode_set or key in replacements:
+                continue
+            eprint = bib_merge.normalise_eprint(bib_merge.get_field(block["raw"], "eprint"))
+            if eprint and bib_merge.is_cited(key, tex_text):
+                manual_eprints[eprint] = key
+
+        if manual_eprints:
+            print("Checking {:d} cited manual .bib entr{} for new ADS records...".format(
+                    len(manual_eprints), "y" if len(manual_eprints) == 1 else "ies"))
+            eprints = list(manual_eprints)
+            search_chunk_size = 50
+            for i in range(0, len(eprints), search_chunk_size):
+                chunk = eprints[i:i + search_chunk_size]
+                search_response = requests.get(
+                    get_search_url("query"),
+                    headers=headers,
+                    params={"q": "identifier:({})".format(' OR '.join('"arXiv:{}"'.format(e) for e in chunk)),
+                            "fl": "bibcode,identifier", "rows": len(chunk)}
+                )
+                search_response.raise_for_status()
+                for doc in search_response.json()["response"]["docs"]:
+                    for identifier in doc.get("identifier", []):
+                        eprint = bib_merge.normalise_eprint(identifier)
+                        if eprint in manual_eprints:
+                            key = manual_eprints[eprint]
+                            if doc["bibcode"] != key:
+                                replacements[key] = doc["bibcode"]
+                            break
+
+            # Add the newly found ADS records to the library so that they are exported below
+            new_bibcodes = list(dict.fromkeys(b for b in replacements.values() if b not in library_bibcode_set))
+            if new_bibcodes:
+                n_new, _ = add_to_library(new_bibcodes)
+                print("Added {:d} ADS record(s) of manual .bib entries to library '{}'".format(n_new, args.library))
+                library_bibcodes.extend(new_bibcodes)
+                library_bibcode_set.update(new_bibcodes)
+
     if replacements:
         print("Found {:d} superseded bibcode(s):".format(len(replacements)))
         for old_bibcode, new_bibcode in replacements.items():
             print("  {} -> {}".format(old_bibcode, new_bibcode))
 
         # Replace all whole-word occurrences in each .tex file containing them
-        superseded_regex = re.compile(r"\b(?:{})\b".format('|'.join(re.escape(b) for b in replacements)))
+        # (keys of manual entries need not be bibcodes, so match on BibTeX key characters
+        # rather than on word boundaries)
+        superseded_regex = re.compile(r"(?<![{0}])(?:{1})(?![{0}])".format(
+                bib_merge.KEY_CHARS, '|'.join(re.escape(b) for b in replacements)))
         for tex_file in tex_files:
             with open(tex_file, 'r', encoding="utf-8") as f:
                 text = f.read()
@@ -310,30 +408,20 @@ if not args.no_bib:
             print("Warning: no LaTeX equivalent known for the following character(s), left as-is: {}".format(
                     ", ".join("'{}' (U+{:04X})".format(c, ord(c)) for c in unconverted)))
 
-    # Determine output path: default to the .bib file sharing its directory and stem with one
-    # of the scanned .tex files; failing that, fall back to a single existing .bib file in the
-    # directory of the first .tex file
-    if args.bib_file:
-        bib_path = args.bib_file
-    else:
-        bib_path = None
-        for tex_file in tex_files:
-            candidate = os.path.splitext(tex_file)[0] + ".bib"
-            if os.path.isfile(candidate):
-                bib_path = candidate
-                break
-        if bib_path is None:
-            tex_dir = os.path.dirname(tex_files[0]) or "."
-            bib_candidates = sorted(glob.glob(os.path.join(tex_dir, "*.bib")))
-            if len(bib_candidates) == 1:
-                bib_path = bib_candidates[0]
-                print("No .bib file matching a scanned .tex file found, falling back to {}".format(bib_path))
-            elif len(bib_candidates) == 0:
-                sys.exit("No .bib file found in {}; specify the output path with --bib_file".format(tex_dir))
-            else:
-                sys.exit("No .bib file matching a scanned .tex file found and multiple candidates exist in {} ({}); "
-                         "specify the output path with --bib_file".format(tex_dir, ", ".join(bib_candidates)))
+    # Preserve manually added entries from the existing .bib file (e.g. preprints not yet on
+    # ADS), unless they overlap with the ADS export; they are appended verbatim (no Unicode
+    # conversion or macro expansion) below a header comment
+    kept = []
+    if existing_bib:
+        print("Checking existing {} for manually added entries...".format(bib_path))
+        kept = bib_merge.manual_blocks(existing_bib, bibtex, read_tex())
+        bibtex = bib_merge.merge(bibtex, kept)
+        if kept:
+            print("Preserved {:d} manually added block(s) not found in ADS:".format(len(kept)))
+            for block in kept:
+                print("  {}".format(block["key"] or "@" + block["type"]))
 
     with open(bib_path, 'w', encoding="utf-8") as f:
         f.write(bibtex)
-    print("Wrote BibTeX for {:d} entries to {}".format(len(library_bibcodes), bib_path))
+    print("Wrote BibTeX for {:d} ADS entries{} to {}".format(
+            len(library_bibcodes), " and {:d} manual block(s)".format(len(kept)) if kept else "", bib_path))

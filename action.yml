@@ -56,6 +56,13 @@ inputs:
       of the published record.
     required: false
     default: "true"
+  keep_manual:
+    description: >
+      Preserve manually added entries in the existing .bib file that are not (yet) on ADS, e.g. a
+      preprint that appeared on arXiv today (true/false). Such an entry is dropped once it overlaps
+      with the ADS export (same key, or same arXiv identifier/DOI while its key is no longer cited).
+    required: false
+    default: "true"
   commit_bib:
     description: >
       Commit and push the updated .bib file back to the repository (true/false).
@@ -99,6 +106,7 @@ runs:
         [ "${{ inputs.keep_unicode }}" = "true" ] && ARGS+=(--keep-unicode)
         [ "${{ inputs.add_macros }}"  = "true" ] && ARGS+=(--add-macros)
         [ "${{ inputs.update_tex }}" = "false" ] && ARGS+=(--no-update-tex)
+        [ "${{ inputs.keep_manual }}" = "false" ] && ARGS+=(--no-keep-manual)
         python "${{ github.action_path }}/ads_cite_sync.py" "${ARGS[@]}"
 
     - name: Commit updated .bib and .tex file(s)

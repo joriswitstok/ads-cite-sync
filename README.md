@@ -33,6 +33,24 @@ on `identifier`, which also resolves alternate bibcodes), and where the canonica
 all occurrences in the scanned `.tex` file(s) are rewritten to it. Set `update_tex: false` to
 disable this.
 
+### Manually added entries
+
+A paper that appeared on arXiv today has no ADS record yet, so it cannot come from the ADS
+export. You can add its BibTeX entry to the `.bib` file by hand: instead of overwriting the file,
+the action keeps any existing entry that does not overlap with the ADS export, and appends it
+verbatim below a `% ----- Entries not (yet) found in ADS ... -----` comment. An entry counts as
+overlapping, and is dropped, when
+
+- an exported entry has the same key (e.g. you used the bibcode ADS later assigns), or
+- an exported entry has the same arXiv identifier (`eprint`) or `doi`, and the manual key is no
+  longer cited in the `.tex` file(s). If it is still cited, both are kept and a warning is logged.
+
+On every run, each cited manual entry with an `eprint` field is also looked up on ADS by its arXiv
+identifier. Once ADS has the paper, its bibcode is added to the library and (with `update_tex`
+enabled) the manual key is replaced by that bibcode in the `.tex` file(s), after which the manual
+entry is dropped as superseded. Manual entries are not converted by `keep_unicode`/`add_macros`.
+Set `keep_manual: false` to overwrite the `.bib` file with the ADS export only.
+
 ## Setup
 
 ### 1. Link your Overleaf project to GitHub
@@ -97,6 +115,7 @@ jobs:
 | `keep_unicode` | Leave non-ASCII characters in the `.bib` file as-is (for LuaLaTeX/XeLaTeX) | `false` |
 | `add_macros` | Expand on AASTeX macros for journal abbreviations, e.g. `\ojap` | `false` |
 | `update_tex` | Replace superseded bibcodes in the scanned `.tex` file(s) | `true` |
+| `keep_manual` | Preserve manually added `.bib` entries that are not (yet) on ADS | `true` |
 | `commit_bib` | Commit and push the updated `.bib` file back to the repository | `true` |
 | `commit_tex` | Commit and push the updated `.tex` file(s) back to the repository | `true` |
 | `commit_message` | Commit message for the `.bib` and `.tex` update | `chore: update BibTeX references [skip ci]` |
